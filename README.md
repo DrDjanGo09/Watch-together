@@ -50,6 +50,59 @@ Runs on `http://localhost:5173` by default.
 3. Copy the room link and send it to your relatives. They open it, enter their
    name (and the PIN if you set one), and watch in sync with you.
 
+## Sharing it with relatives over the internet (Cloudflare Tunnel)
+
+The server runs on your own machine (`localhost`), which relatives can't reach
+directly. [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+exposes it with a public `https://` link, without needing a domain, a static IP,
+or opening ports on your router.
+
+This runs on **your machine** (wherever you're running the server) — Cloudflare's
+CLI (`cloudflared`) needs to run alongside the app itself.
+
+### 1. Build the app to run on a single port
+
+For tunneling, it's simplest to have one process serving everything (frontend +
+API + WebSockets) on one port, instead of the two-process dev setup:
+
+```bash
+cd client
+npm install
+npm run build        # produces client/dist — do NOT create a client/.env file for this
+
+cd ../server
+npm install
+npm start             # serves the app (frontend + API + sockets) on http://localhost:4000
+```
+
+Leave this running. Open `http://localhost:4000` locally to confirm it works
+before moving on.
+
+### 2. Install cloudflared
+
+- **macOS**: `brew install cloudflare/cloudflare/cloudflared`
+- **Windows**: `winget install --id Cloudflare.cloudflared`
+- **Linux**: see [Cloudflare's install docs](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) for your distro (`.deb`/`.rpm`/binary)
+
+### 3. Start the tunnel
+
+In a second terminal, with the server still running:
+
+```bash
+cloudflared tunnel --url http://localhost:4000
+```
+
+Cloudflared prints a public link like `https://random-two-words.trycloudflare.com`
+— that's the link to share with your relatives. No Cloudflare account needed.
+
+**Things to know about this "Quick Tunnel":**
+- The link is temporary — it changes every time you stop and restart the
+  `cloudflared` command, so re-share it if you restart.
+- Your computer needs to stay on and connected for as long as anyone might want
+  to watch (the server and the tunnel both run locally).
+- Good for a one-off watch party. If you want a permanent link that doesn't change,
+  that needs a Cloudflare account and a domain — ask if you want that set up instead.
+
 ## Notes & next steps
 
 - Video files are stored on local disk on the server — fine for running on your
