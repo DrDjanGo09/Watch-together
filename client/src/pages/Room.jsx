@@ -27,7 +27,13 @@ export default function Room() {
 
   const videoRef = useRef(null);
   const socketRef = useRef(null);
-  const applyingRemoteRef = useRef(false);
+  // Counts DOM events (play/pause/seeked) we're about to trigger ourselves by
+  // applying a remote sync, so broadcastPlayback can tell them apart from a
+  // genuine local user action and not echo them back to the room. A counter
+  // (rather than a fixed timeout) is used because those events can legitimately
+  // fire much later than expected on a slow connection — a seek in particular
+  // has to fetch the new position over the network before 'seeked' fires.
+  const suppressEventsRef = useRef(0);
   const chatEndRef = useRef(null);
 
   // Load room metadata
@@ -46,6 +52,26 @@ export default function Room() {
       const socket = getSocket();
       socketRef.current = socket;
 
+      const applyRemoteSync = (playback) => {
+        const v = videoRef.current;
+        if (!v || !playback) return;
+        if (Math.abs(v.currentTime - playback.time) > SYNC_DRIFT_TOLERANCE) {
+          v.currentTime = playback.time;
+          suppressEventsRef.current += 1; // expect a 'seeked' once the new position loads
+        }
+        if (playback.playing && v.paused) {
+          suppressEventsRef.current += 1; // expect a 'play'
+          v.play().catch(() => {
+            // Playback never actually started (e.g. blocked autoplay), so the
+            // 'play' event we were expecting never fires — give the credit back.
+            suppressEventsRef.current = Math.max(0, suppressEventsRef.current - 1);
+          });
+        } else if (!playback.playing && !v.paused) {
+          suppressEventsRef.current += 1; // expect a 'pause'
+          v.pause();
+        }
+      };
+
       const joinRoom = () => {
         socket.emit('join-room', { roomId, name: displayName, pin }, (res) => {
           if (!res?.ok) {
@@ -56,29 +82,14 @@ export default function Room() {
           setJoined(true);
           setParticipants(res.participants || []);
           setHasVideo(res.hasVideo);
-          if (videoRef.current && res.playback) {
-            applyingRemoteRef.current = true;
-            videoRef.current.currentTime = res.playback.time || 0;
-            if (res.playback.playing) videoRef.current.play().catch(() => {});
-            setTimeout(() => (applyingRemoteRef.current = false), 300);
-          }
+          applyRemoteSync(res.playback);
         });
       };
       const onDisconnect = () => setJoined(false);
       const onParticipants = (list) => setParticipants(list);
       const onVideoReady = () => setHasVideo(true);
       const onChatMessage = (msg) => setMessages((prev) => [...prev, msg]);
-      const onPlaybackSync = (playback) => {
-        const v = videoRef.current;
-        if (!v) return;
-        applyingRemoteRef.current = true;
-        if (Math.abs(v.currentTime - playback.time) > SYNC_DRIFT_TOLERANCE) {
-          v.currentTime = playback.time;
-        }
-        if (playback.playing && v.paused) v.play().catch(() => {});
-        if (!playback.playing && !v.paused) v.pause();
-        setTimeout(() => (applyingRemoteRef.current = false), 300);
-      };
+      const onPlaybackSync = (playback) => applyRemoteSync(playback);
 
       // Re-join on every 'connect', not just the first one: the socket auto-
       // reconnects after a dropped connection (flaky wifi, tunnel hiccup), but
@@ -141,7 +152,11 @@ export default function Room() {
 
   function broadcastPlayback() {
     const v = videoRef.current;
-    if (!v || applyingRemoteRef.current) return;
+    if (!v) return;
+    if (suppressEventsRef.current > 0) {
+      suppressEventsRef.current -= 1;
+      return;
+    }
     socketRef.current?.emit('playback-update', { time: v.currentTime, playing: !v.paused });
   }
 
@@ -187,7 +202,7 @@ export default function Room() {
         <form className="card" onSubmit={handleNameSubmit}>
           <label>
             Your name
-            <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="e.g. Aunt Meera" autoFocus />
+            <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} autoFocus />
           </label>
           <button type="submit">Continue</button>
         </form>
