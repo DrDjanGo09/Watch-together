@@ -34,7 +34,14 @@ export default function Home() {
 
   return (
     <div className="page">
-      <h1>Watch Together</h1>
+      <div className="brand">
+        <span className="brand-mark" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <path d="M8 5v14l11-7-11-7z" fill="#fff" />
+          </svg>
+        </span>
+        <h1>Watch Together</h1>
+      </div>
       <p className="subtitle">Share your personal videos with family and watch in sync, wherever they are.</p>
 
       <div className="cards">
@@ -45,7 +52,6 @@ export default function Home() {
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Priya & Raj's Wedding"
               maxLength={80}
             />
           </label>
