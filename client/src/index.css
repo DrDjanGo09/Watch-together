@@ -275,11 +275,69 @@ button:disabled {
   gap: 16px;
 }
 
+.player-wrap {
+  position: relative;
+}
+
 .player {
   width: 100%;
   border-radius: 16px;
   background: #000;
   box-shadow: var(--shadow-lg);
+  display: block;
+}
+
+.reaction-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 16px;
+  pointer-events: none;
+}
+
+.reaction-float {
+  position: absolute;
+  bottom: 10%;
+  font-size: 2rem;
+  animation: float-up 2.2s ease-out forwards;
+}
+
+@keyframes float-up {
+  0% {
+    opacity: 0;
+    transform: translateY(0) scale(0.6);
+  }
+  15% {
+    opacity: 1;
+    transform: translateY(-10%) scale(1.1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-220%) scale(1);
+  }
+}
+
+.reaction-picker {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+.reaction-btn {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  font-size: 1.2rem;
+  line-height: 1;
+  box-shadow: var(--shadow);
+  transition: transform 120ms ease;
+}
+
+.reaction-btn:hover {
+  transform: translateY(-2px) scale(1.08);
 }
 
 .video-placeholder {

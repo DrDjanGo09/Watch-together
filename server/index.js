@@ -59,6 +59,20 @@ app.get('/api/rooms/:roomId', (req, res) => {
   res.json(roomPublicInfo(room));
 });
 
+// Read-only summary of active rooms, for the desktop launcher's status view.
+// Deliberately excludes hostToken and participant names — just enough to show
+// "2 watching Family Watch Party" without exposing anything sensitive.
+app.get('/api/status', (req, res) => {
+  res.json({
+    rooms: [...rooms.values()].map((room) => ({
+      id: room.id,
+      name: room.name,
+      participantCount: room.participants.size,
+      hasVideo: Boolean(room.videoFile),
+    })),
+  });
+});
+
 app.post('/api/rooms/:roomId/verify-pin', (req, res) => {
   const room = rooms.get(req.params.roomId);
   if (!room) return res.status(404).json({ error: 'Room not found' });
@@ -245,6 +259,13 @@ io.on('connection', (socket) => {
       text: String(text).slice(0, 1000),
       ts: Date.now(),
     });
+  });
+
+  // Ephemeral emoji burst over the video — not persisted, just relayed live.
+  const ALLOWED_REACTIONS = new Set(['❤️', '😂', '😮', '👏', '🔥']);
+  socket.on('reaction', ({ emoji }) => {
+    if (!joinedRoomId || !ALLOWED_REACTIONS.has(emoji)) return;
+    io.to(joinedRoomId).emit('reaction', { emoji, name: displayName });
   });
 
   socket.on('disconnect', () => {

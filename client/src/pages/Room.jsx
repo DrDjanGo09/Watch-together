@@ -5,6 +5,8 @@ import { getSocket } from '../lib/socket';
 
 const SYNC_DRIFT_TOLERANCE = 1.5; // seconds
 const SYNC_BROADCAST_INTERVAL = 4000; // ms, periodic correction while playing
+const REACTION_EMOJIS = ['❤️', '😂', '😮', '👏', '🔥'];
+const REACTION_LIFETIME = 2200; // ms, matches the float-up CSS animation
 
 export default function Room() {
   const { roomId } = useParams();
@@ -24,6 +26,7 @@ export default function Room() {
   const [uploadProgress, setUploadProgress] = useState(null);
   const [hasVideo, setHasVideo] = useState(false);
   const [error, setError] = useState('');
+  const [reactions, setReactions] = useState([]);
 
   const videoRef = useRef(null);
   const socketRef = useRef(null);
@@ -90,6 +93,14 @@ export default function Room() {
       const onVideoReady = () => setHasVideo(true);
       const onChatMessage = (msg) => setMessages((prev) => [...prev, msg]);
       const onPlaybackSync = (playback) => applyRemoteSync(playback);
+      const onReaction = ({ emoji }) => {
+        const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const left = 10 + Math.random() * 80; // percent, keep clear of the edges
+        setReactions((prev) => [...prev, { id, emoji, left }]);
+        setTimeout(() => {
+          setReactions((prev) => prev.filter((r) => r.id !== id));
+        }, REACTION_LIFETIME);
+      };
 
       // Re-join on every 'connect', not just the first one: the socket auto-
       // reconnects after a dropped connection (flaky wifi, tunnel hiccup), but
@@ -103,6 +114,7 @@ export default function Room() {
       socket.on('video-ready', onVideoReady);
       socket.on('chat-message', onChatMessage);
       socket.on('playback-sync', onPlaybackSync);
+      socket.on('reaction', onReaction);
 
       socket.connect();
 
@@ -112,6 +124,7 @@ export default function Room() {
         socket.off('participants-update', onParticipants);
         socket.off('video-ready', onVideoReady);
         socket.off('chat-message', onChatMessage);
+        socket.off('reaction', onReaction);
         socket.off('playback-sync', onPlaybackSync);
       };
     },
@@ -158,6 +171,10 @@ export default function Room() {
       return;
     }
     socketRef.current?.emit('playback-update', { time: v.currentTime, playing: !v.paused });
+  }
+
+  function sendReaction(emoji) {
+    socketRef.current?.emit('reaction', { emoji });
   }
 
   async function handleUpload(e) {
@@ -255,17 +272,36 @@ export default function Room() {
           )}
 
           {hasVideo ? (
-            <video
-              ref={videoRef}
-              className="player"
-              src={videoUrl(roomId)}
-              controls
-              onPlay={broadcastPlayback}
-              onPause={broadcastPlayback}
-              onSeeked={broadcastPlayback}
-            />
+            <div className="player-wrap">
+              <video
+                ref={videoRef}
+                className="player"
+                src={videoUrl(roomId)}
+                controls
+                onPlay={broadcastPlayback}
+                onPause={broadcastPlayback}
+                onSeeked={broadcastPlayback}
+              />
+              <div className="reaction-layer" aria-hidden="true">
+                {reactions.map((r) => (
+                  <span key={r.id} className="reaction-float" style={{ left: `${r.left}%` }}>
+                    {r.emoji}
+                  </span>
+                ))}
+              </div>
+            </div>
           ) : (
             <div className="video-placeholder">Waiting for the host to upload the video…</div>
+          )}
+
+          {hasVideo && (
+            <div className="reaction-picker">
+              {REACTION_EMOJIS.map((emoji) => (
+                <button key={emoji} type="button" className="reaction-btn" onClick={() => sendReaction(emoji)}>
+                  {emoji}
+                </button>
+              ))}
+            </div>
           )}
           {error && <p className="error">{error}</p>}
         </div>
