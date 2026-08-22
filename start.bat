@@ -5,9 +5,31 @@ cd /d "%~dp0"
 echo ==^> Checking for Node.js...
 where node >nul 2>nul
 if errorlevel 1 (
-  echo Node.js is not installed. Install it from https://nodejs.org (LTS version) and re-run this script.
-  pause
-  exit /b 1
+  echo Node.js not found. Trying to install it automatically via winget...
+  where winget >nul 2>nul
+  if errorlevel 1 (
+    echo winget is not available on this system.
+    echo Please install Node.js yourself from https://nodejs.org ^(LTS version^) and re-run this script.
+    pause
+    exit /b 1
+  )
+  winget install -e --id OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements
+  if errorlevel 1 (
+    echo Automatic install failed. Please install Node.js yourself from https://nodejs.org ^(LTS version^) and re-run this script.
+    pause
+    exit /b 1
+  )
+  rem winget just installed Node but this window's PATH doesn't know yet — add the
+  rem usual install location for the rest of this run.
+  set "PATH=%ProgramFiles%\nodejs;%PATH%"
+  where node >nul 2>nul
+  if errorlevel 1 (
+    echo Node.js was installed but isn't available in this window yet.
+    echo Please close this window, open a new one, and re-run start.bat.
+    pause
+    exit /b 1
+  )
+  echo Node.js installed successfully.
 )
 
 echo ==^> Installing client dependencies...

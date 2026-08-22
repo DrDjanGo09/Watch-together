@@ -22,8 +22,20 @@ trap cleanup EXIT INT TERM
 
 echo "==> Checking for Node.js..."
 if ! command -v node >/dev/null 2>&1; then
-  echo "Node.js is not installed. Install it from https://nodejs.org (LTS version) and re-run this script."
-  exit 1
+  echo "    Node.js not found. Trying to install it automatically..."
+  if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+    brew install node
+  elif command -v apt-get >/dev/null 2>&1; then
+    curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+    sudo apt-get install -y nodejs
+  elif command -v dnf >/dev/null 2>&1; then
+    sudo dnf install -y nodejs
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    echo "Could not install Node.js automatically. Install it yourself from https://nodejs.org (LTS version) and re-run this script."
+    exit 1
+  fi
+  echo "    Node.js installed successfully."
 fi
 echo "    Found: $(node --version)"
 
