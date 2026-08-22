@@ -1,0 +1,45 @@
+{
+  "name": "watch-together-desktop",
+  "version": "1.0.0",
+  "description": "Desktop launcher for Watch Together — starts the server and a public link with no terminal required.",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^43.4.1",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  },
+  "build": {
+    "appId": "com.watchtogether.desktop",
+    "productName": "Watch Together",
+    "asar": false,
+    "files": [
+      "main.js",
+      "preload.js",
+      "launcher.js",
+      "renderer/**/*",
+      "node_modules/**/*"
+    ],
+    "extraResources": [
+      { "from": "../server", "to": "server", "filter": ["**/*", "!uploads/**", "!node_modules/**"] },
+      { "from": "../server/node_modules", "to": "node_modules" },
+      { "from": "../client/dist", "to": "client/dist" },
+      { "from": "../cloudflared.exe", "to": "cloudflared.exe" }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
