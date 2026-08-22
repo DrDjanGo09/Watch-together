@@ -18,7 +18,28 @@ Rooms are identified by an unguessable code embedded in the room link, optionall
 protected by a PIN. There's no account system — it's built for sharing a link with
 family, not for public use.
 
-## Running locally
+## Quick start (one command, sets up a public link for relatives)
+
+If you just want to get a room running and share it with family with the least
+effort, use the all-in-one script instead of the manual steps below. It installs
+dependencies, builds the app, starts the server, and opens a Cloudflare Tunnel —
+all in one go.
+
+- **macOS**: double-click `start.command` (or run `./start.sh` in Terminal)
+- **Linux**: run `./start.sh` in a terminal
+- **Windows**: double-click `start.bat`
+
+Requires [Node.js](https://nodejs.org) (LTS) to already be installed. The script
+downloads `cloudflared` automatically if it's missing. When it's running, it
+prints a public `https://....trycloudflare.com` link — that's what you share
+with your relatives. Press Ctrl+C (or close the window on Windows) to stop
+everything when you're done.
+
+See [Sharing it with relatives over the internet](#sharing-it-with-relatives-over-the-internet-cloudflare-tunnel)
+below for details on what this is doing and its limitations (temporary link,
+your computer needs to stay on).
+
+## Running locally (manual / development)
 
 ### 1. Start the server
 
