@@ -69,37 +69,72 @@ app.post('/api/rooms/:roomId/verify-pin', (req, res) => {
 });
 
 // --- Video upload (host only, authorized via hostToken from room creation) ---
+//
+// Uploaded in chunks rather than one big request: services that proxy the app
+// (e.g. Cloudflare, including free Tunnels) cap individual request bodies at
+// ~100MB, which a multi-GB video would blow through in a single-shot upload.
+// Each chunk arrives as its own small request; the client sends them in order
+// and the server appends them to a temporary file, then finalizes on completion.
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '.mp4';
-    cb(null, `${req.params.roomId}-${nanoid(8)}${ext}`);
-  },
+const UPLOAD_ID_RE = /^[a-zA-Z0-9_-]+$/;
+
+const chunkUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 30 * 1024 * 1024 }, // headroom above the client's ~20MB chunk size
 });
-const upload = multer({
-  storage,
-  limits: { fileSize: 8 * 1024 * 1024 * 1024 }, // 8GB cap, adjust as needed
-});
 
-app.post('/api/rooms/:roomId/upload', upload.single('video'), (req, res) => {
-  const room = rooms.get(req.params.roomId);
-  if (!room) return res.status(404).json({ error: 'Room not found' });
-
+function requireHost(req, res, room) {
   const hostToken = req.header('x-host-token');
   if (hostToken !== room.hostToken) {
-    if (req.file) fs.unlink(req.file.path, () => {});
-    return res.status(403).json({ error: 'Only the host can upload the video' });
+    res.status(403).json({ error: 'Only the host can upload the video' });
+    return false;
   }
-  if (!req.file) return res.status(400).json({ error: 'No video file received' });
+  return true;
+}
+
+app.post('/api/rooms/:roomId/upload/chunk', chunkUpload.single('chunk'), (req, res) => {
+  const room = rooms.get(req.params.roomId);
+  if (!room) return res.status(404).json({ error: 'Room not found' });
+  if (!requireHost(req, res, room)) return;
+  if (!req.file) return res.status(400).json({ error: 'No chunk received' });
+
+  const { uploadId } = req.query;
+  if (!uploadId || !UPLOAD_ID_RE.test(String(uploadId))) {
+    return res.status(400).json({ error: 'Invalid uploadId' });
+  }
+
+  // Chunks are sent one at a time, awaited in order by the client, so a plain
+  // append keeps them in the right sequence.
+  const partPath = path.join(UPLOAD_DIR, `${room.id}-${uploadId}.part`);
+  fs.appendFileSync(partPath, req.file.buffer);
+  res.json({ ok: true });
+});
+
+app.post('/api/rooms/:roomId/upload/complete', (req, res) => {
+  const room = rooms.get(req.params.roomId);
+  if (!room) return res.status(404).json({ error: 'Room not found' });
+  if (!requireHost(req, res, room)) return;
+
+  const { uploadId, originalName } = req.body || {};
+  if (!uploadId || !UPLOAD_ID_RE.test(String(uploadId))) {
+    return res.status(400).json({ error: 'Invalid uploadId' });
+  }
+
+  const partPath = path.join(UPLOAD_DIR, `${room.id}-${uploadId}.part`);
+  if (!fs.existsSync(partPath)) {
+    return res.status(400).json({ error: 'No uploaded data found for this uploadId' });
+  }
+
+  const ext = path.extname(String(originalName || '')) || '.mp4';
+  const finalFilename = `${room.id}-${nanoid(8)}${ext}`;
 
   if (room.videoFile) {
-    const oldPath = path.join(UPLOAD_DIR, room.videoFile);
-    fs.unlink(oldPath, () => {});
+    fs.unlink(path.join(UPLOAD_DIR, room.videoFile), () => {});
   }
 
-  room.videoFile = req.file.filename;
-  room.videoOriginalName = req.file.originalname;
+  fs.renameSync(partPath, path.join(UPLOAD_DIR, finalFilename));
+  room.videoFile = finalFilename;
+  room.videoOriginalName = originalName || finalFilename;
   room.playback = { time: 0, playing: false, updatedAt: Date.now() };
 
   io.to(room.id).emit('video-ready', { videoOriginalName: room.videoOriginalName });
