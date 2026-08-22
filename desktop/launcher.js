@@ -12,12 +12,45 @@ const TUNNEL_URL_RE = /https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/;
 // Cloudflare tunnel and reports back over a plain onLog callback, so it can
 // run either inside Electron's main process or standalone under plain Node
 // (for testing) without pulling in the `electron` module.
-function createLauncher({ resourceRoot, userDataDir, onLog }) {
+const STATUS_POLL_INTERVAL = 3000; // ms
+
+function createLauncher({ resourceRoot, userDataDir, onLog, onRoomStatus }) {
   let serverProc = null;
   let tunnelProc = null;
+  let statusInterval = null;
 
   function log(line) {
     if (onLog) onLog(line);
+  }
+
+  function fetchStatus() {
+    http
+      .get(`http://localhost:${PORT}/api/status`, (res) => {
+        let body = '';
+        res.on('data', (chunk) => (body += chunk));
+        res.on('end', () => {
+          try {
+            const data = JSON.parse(body);
+            if (onRoomStatus) onRoomStatus(data.rooms || []);
+          } catch {
+            // transient — server may be mid-restart, just skip this tick
+          }
+        });
+      })
+      .on('error', () => {});
+  }
+
+  function startStatusPolling() {
+    stopStatusPolling();
+    fetchStatus();
+    statusInterval = setInterval(fetchStatus, STATUS_POLL_INTERVAL);
+  }
+
+  function stopStatusPolling() {
+    if (statusInterval) {
+      clearInterval(statusInterval);
+      statusInterval = null;
+    }
   }
 
   function resourcePath(...segments) {
@@ -135,6 +168,7 @@ function createLauncher({ resourceRoot, userDataDir, onLog }) {
   }
 
   function stopAll() {
+    stopStatusPolling();
     if (tunnelProc) {
       tunnelProc.removeAllListeners('exit');
       tunnelProc.kill();
@@ -150,6 +184,7 @@ function createLauncher({ resourceRoot, userDataDir, onLog }) {
   async function start() {
     log('Starting local server...');
     await startServerProcess();
+    startStatusPolling();
     log('Server is up. Opening a public tunnel...');
     const url = await startTunnel();
     const qrDataUrl = await QRCode.toDataURL(url, { margin: 1, width: 220 });

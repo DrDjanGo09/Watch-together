@@ -195,6 +195,36 @@ button.link-btn {
   display: none;
 }
 
+.rooms-card ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rooms-card li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-h);
+}
+
+.room-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  flex-shrink: 0;
+}
+
+.room-count {
+  margin-left: auto;
+  color: var(--text);
+}
+
 .details {
   font-size: 12px;
   color: var(--text);

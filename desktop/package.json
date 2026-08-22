@@ -29,13 +29,31 @@
       "node_modules/**/*"
     ],
     "extraResources": [
-      { "from": "../server", "to": "server", "filter": ["**/*", "!uploads/**", "!node_modules/**"] },
-      { "from": "../server/node_modules", "to": "node_modules" },
-      { "from": "../client/dist", "to": "client/dist" },
-      { "from": "../cloudflared.exe", "to": "cloudflared.exe" }
+      {
+        "from": "../server",
+        "to": "server",
+        "filter": [
+          "**/*",
+          "!uploads/**",
+          "!node_modules/**"
+        ]
+      },
+      {
+        "from": "../server/node_modules",
+        "to": "node_modules"
+      },
+      {
+        "from": "../client/dist",
+        "to": "client/dist"
+      },
+      {
+        "from": "../cloudflared.exe",
+        "to": "cloudflared.exe"
+      }
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "renderer/icon.png"
     },
     "nsis": {
       "oneClick": false,

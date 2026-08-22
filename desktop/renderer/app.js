@@ -9,6 +9,8 @@ const linkInput = document.getElementById('link-input');
 const copyBtn = document.getElementById('copy-btn');
 const openBtn = document.getElementById('open-btn');
 const logEl = document.getElementById('log');
+const roomsCard = document.getElementById('rooms-card');
+const roomsList = document.getElementById('rooms-list');
 
 let running = false;
 
@@ -24,6 +26,7 @@ function applyStatus({ state, url, qrDataUrl, error }) {
     toggleBtn.textContent = 'Starting…';
     toggleBtn.disabled = true;
     shareCard.classList.add('hidden');
+    roomsCard.classList.add('hidden');
     running = false;
   } else if (state === 'running') {
     setStatus('running', 'Running');
@@ -39,6 +42,7 @@ function applyStatus({ state, url, qrDataUrl, error }) {
     toggleBtn.disabled = false;
     running = false;
     shareCard.classList.add('hidden');
+    roomsCard.classList.add('hidden');
     errorCard.classList.remove('hidden');
     errorText.textContent = error || 'Unknown error';
   } else {
@@ -47,6 +51,7 @@ function applyStatus({ state, url, qrDataUrl, error }) {
     toggleBtn.disabled = false;
     running = false;
     shareCard.classList.add('hidden');
+    roomsCard.classList.add('hidden');
   }
 }
 
@@ -69,8 +74,31 @@ openBtn.addEventListener('click', () => {
   window.watchTogether.openLink(linkInput.value);
 });
 
+function renderRooms(rooms) {
+  if (!running || !rooms || rooms.length === 0) {
+    roomsCard.classList.add('hidden');
+    return;
+  }
+  roomsCard.classList.remove('hidden');
+  roomsList.innerHTML = '';
+  for (const room of rooms) {
+    const li = document.createElement('li');
+    const count = room.participantCount;
+    const who = count === 1 ? '1 watching' : `${count} watching`;
+    li.innerHTML = `<span class="room-dot"></span><strong>${escapeHtml(room.name)}</strong><span class="room-count">${who}</span>`;
+    roomsList.appendChild(li);
+  }
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
 window.watchTogether.onStatus(applyStatus);
 window.watchTogether.onLog((line) => {
   logEl.textContent += line + '\n';
   logEl.scrollTop = logEl.scrollHeight;
 });
+window.watchTogether.onRoomStatus(renderRooms);

@@ -7,4 +7,5 @@ contextBridge.exposeInMainWorld('watchTogether', {
   openLink: (url) => ipcRenderer.invoke('open-link', url),
   onStatus: (cb) => ipcRenderer.on('status', (_evt, payload) => cb(payload)),
   onLog: (cb) => ipcRenderer.on('log', (_evt, line) => cb(line)),
+  onRoomStatus: (cb) => ipcRenderer.on('room-status', (_evt, rooms) => cb(rooms)),
 });
