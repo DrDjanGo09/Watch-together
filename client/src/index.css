@@ -145,6 +145,16 @@ button:disabled {
   font-size: 14px;
 }
 
+.reconnect-banner {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid var(--accent);
+  color: var(--text-h);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
 .room-body {
   display: grid;
   grid-template-columns: 2fr 1fr;

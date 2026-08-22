@@ -30,28 +30,49 @@ export function verifyPin(roomId, pin) {
   });
 }
 
-export function uploadVideo(roomId, file, hostToken, onProgress) {
+// Uploaded in ~20MB chunks rather than one request: services that proxy the app
+// (e.g. Cloudflare, including free Tunnels) cap individual request bodies at
+// ~100MB, which a multi-GB video would exceed in a single-shot upload.
+const CHUNK_SIZE = 20 * 1024 * 1024;
+
+function uploadChunk(roomId, uploadId, chunkBlob, hostToken) {
   return new Promise((resolve, reject) => {
     const form = new FormData();
-    form.append('video', file);
+    form.append('chunk', chunkBlob);
 
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', `${API_BASE}/api/rooms/${roomId}/upload`);
+    xhr.open('POST', `${API_BASE}/api/rooms/${roomId}/upload/chunk?uploadId=${uploadId}`);
     xhr.setRequestHeader('x-host-token', hostToken);
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
-    };
     xhr.onload = () => {
-      try {
-        const data = JSON.parse(xhr.responseText);
-        if (xhr.status >= 200 && xhr.status < 300) resolve(data);
-        else reject(new Error(data.error || 'Upload failed'));
-      } catch {
-        reject(new Error('Upload failed'));
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else {
+        try {
+          reject(new Error(JSON.parse(xhr.responseText).error || 'Chunk upload failed'));
+        } catch {
+          reject(new Error('Chunk upload failed'));
+        }
       }
     };
-    xhr.onerror = () => reject(new Error('Upload failed'));
+    xhr.onerror = () => reject(new Error('Chunk upload failed'));
     xhr.send(form);
+  });
+}
+
+export async function uploadVideo(roomId, file, hostToken, onProgress) {
+  const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  let uploaded = 0;
+
+  for (let start = 0; start < file.size; start += CHUNK_SIZE) {
+    const chunk = file.slice(start, Math.min(start + CHUNK_SIZE, file.size));
+    await uploadChunk(roomId, uploadId, chunk, hostToken);
+    uploaded += chunk.size;
+    if (onProgress) onProgress(Math.round((uploaded / file.size) * 100));
+  }
+
+  return request(`/api/rooms/${roomId}/upload/complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-host-token': hostToken },
+    body: JSON.stringify({ uploadId, originalName: file.name }),
   });
 }
 
