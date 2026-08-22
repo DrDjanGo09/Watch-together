@@ -45,29 +45,30 @@ export default function Room() {
     (pin) => {
       const socket = getSocket();
       socketRef.current = socket;
-      socket.connect();
 
-      socket.emit('join-room', { roomId, name: displayName, pin }, (res) => {
-        if (!res?.ok) {
-          setError(res?.error || 'Could not join room');
-          socket.disconnect();
-          return;
-        }
-        setJoined(true);
-        setParticipants(res.participants || []);
-        setHasVideo(res.hasVideo);
-        if (videoRef.current && res.playback) {
-          applyingRemoteRef.current = true;
-          videoRef.current.currentTime = res.playback.time || 0;
-          if (res.playback.playing) videoRef.current.play().catch(() => {});
-          setTimeout(() => (applyingRemoteRef.current = false), 300);
-        }
-      });
-
-      socket.on('participants-update', setParticipants);
-      socket.on('video-ready', () => setHasVideo(true));
-      socket.on('chat-message', (msg) => setMessages((prev) => [...prev, msg]));
-      socket.on('playback-sync', (playback) => {
+      const joinRoom = () => {
+        socket.emit('join-room', { roomId, name: displayName, pin }, (res) => {
+          if (!res?.ok) {
+            setError(res?.error || 'Could not join room');
+            socket.disconnect();
+            return;
+          }
+          setJoined(true);
+          setParticipants(res.participants || []);
+          setHasVideo(res.hasVideo);
+          if (videoRef.current && res.playback) {
+            applyingRemoteRef.current = true;
+            videoRef.current.currentTime = res.playback.time || 0;
+            if (res.playback.playing) videoRef.current.play().catch(() => {});
+            setTimeout(() => (applyingRemoteRef.current = false), 300);
+          }
+        });
+      };
+      const onDisconnect = () => setJoined(false);
+      const onParticipants = (list) => setParticipants(list);
+      const onVideoReady = () => setHasVideo(true);
+      const onChatMessage = (msg) => setMessages((prev) => [...prev, msg]);
+      const onPlaybackSync = (playback) => {
         const v = videoRef.current;
         if (!v) return;
         applyingRemoteRef.current = true;
@@ -77,15 +78,40 @@ export default function Room() {
         if (playback.playing && v.paused) v.play().catch(() => {});
         if (!playback.playing && !v.paused) v.pause();
         setTimeout(() => (applyingRemoteRef.current = false), 300);
-      });
+      };
+
+      // Re-join on every 'connect', not just the first one: the socket auto-
+      // reconnects after a dropped connection (flaky wifi, tunnel hiccup), but
+      // that reconnect is anonymous until we re-send join-room. Without this,
+      // a reconnected device's <video> keeps playing locally (it's a plain
+      // HTML5 element, independent of the socket) while silently falling out
+      // of sync with everyone else.
+      socket.on('connect', joinRoom);
+      socket.on('disconnect', onDisconnect);
+      socket.on('participants-update', onParticipants);
+      socket.on('video-ready', onVideoReady);
+      socket.on('chat-message', onChatMessage);
+      socket.on('playback-sync', onPlaybackSync);
+
+      socket.connect();
+
+      return () => {
+        socket.off('connect', joinRoom);
+        socket.off('disconnect', onDisconnect);
+        socket.off('participants-update', onParticipants);
+        socket.off('video-ready', onVideoReady);
+        socket.off('chat-message', onChatMessage);
+        socket.off('playback-sync', onPlaybackSync);
+      };
     },
     [roomId, displayName]
   );
 
   useEffect(() => {
     if (!nameConfirmed || !roomInfo || needsPin) return;
-    doJoin(undefined);
+    const removeListeners = doJoin(undefined);
     return () => {
+      removeListeners();
       socketRef.current?.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -200,6 +226,8 @@ export default function Room() {
           </button>
         </div>
       </div>
+
+      {!joined && <div className="reconnect-banner">Reconnecting… your video keeps playing, but is temporarily out of sync with the room.</div>}
 
       <div className="room-body">
         <div className="video-column">
