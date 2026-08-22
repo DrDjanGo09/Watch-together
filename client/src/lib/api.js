@@ -1,4 +1,7 @@
-export const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
+// Empty string = same origin as the page (used for the production build, served by
+// the Express server itself). Set VITE_API_BASE in client/.env for the two-process
+// dev workflow (Vite on 5173, API server on 4000).
+export const API_BASE = import.meta.env.VITE_API_BASE || '';
 
 async function request(path, options = {}) {
   const res = await fetch(`${API_BASE}${path}`, options);

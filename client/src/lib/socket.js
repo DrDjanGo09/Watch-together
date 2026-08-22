@@ -5,7 +5,9 @@ let socket = null;
 
 export function getSocket() {
   if (!socket) {
-    socket = io(API_BASE, { autoConnect: false });
+    // Passing undefined (rather than an empty string) makes socket.io-client
+    // connect to the page's own origin.
+    socket = io(API_BASE || undefined, { autoConnect: false });
   }
   return socket;
 }

@@ -226,6 +226,18 @@ io.on('connection', (socket) => {
   });
 });
 
+// --- Serve the built frontend (if present) so the whole app runs on one port ---
+// Run `npm run build` in /client first; without a build, this is skipped and the
+// frontend is expected to run separately (e.g. `npm run dev` in /client during development).
+const clientDistPath = path.join(__dirname, '..', 'client', 'dist');
+if (fs.existsSync(clientDistPath)) {
+  app.use(express.static(clientDistPath));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(clientDistPath, 'index.html'));
+  });
+  console.log('Serving built frontend from client/dist');
+}
+
 server.listen(PORT, () => {
   console.log(`Watch-together server listening on port ${PORT}`);
 });
