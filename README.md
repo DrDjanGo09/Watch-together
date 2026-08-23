@@ -3,27 +3,58 @@
 Watch your own videos in sync with family and friends, wherever they are. Built for
 sharing personal videos (like wedding videos) with relatives over the internet —
 one person uploads the video, everyone joins the room link, and playback (play,
-pause, seek) stays in sync for everyone, with a chat sidebar to react together.
+pause, seek) stays in sync for everyone, with a chat sidebar and quick emoji
+reactions to react together.
 
 ## How it works
 
 - **Server** (`/server`): Node.js + Express + Socket.io. Hosts rooms in memory,
-  accepts a video upload from the room's host, streams it back out with HTTP
-  Range support (so seeking works), and broadcasts play/pause/seek events to
-  everyone in the room over WebSockets.
+  accepts a video upload from the room's host in chunks (works around the ~100MB
+  single-request cap that free tunnel/proxy services impose), streams it back out
+  with HTTP Range support (so seeking works), and broadcasts play/pause/seek,
+  chat, and reactions to everyone in the room over WebSockets. If the uploaded
+  file's codec isn't one browsers can play directly (common with `.mkv`, HEVC,
+  etc.), it's transcoded to HLS in the background — playback starts as soon as
+  the first few seconds are ready rather than waiting for the whole file. Devices
+  that drop and regain their connection (flaky wifi, tunnel hiccup) automatically
+  resync instead of drifting.
 - **Client** (`/client`): React (Vite) app. Create or join a room, upload a video
-  (host only), and watch together with a synced player and live chat.
+  (host only), and watch together with a synced player, live chat, and reactions.
+- **Desktop app** (`/desktop`): an Electron launcher for Windows — start/stop the
+  server and a public link with one click, no terminal window. Shows a shareable
+  link and QR code, live "who's watching" status, and minimizes to the system
+  tray instead of quitting when you close the window. Doesn't require Node.js to
+  be installed separately (it runs the server through Electron's own bundled
+  runtime).
 
 Rooms are identified by an unguessable code embedded in the room link, optionally
 protected by a PIN. There's no account system — it's built for sharing a link with
 family, not for public use.
 
-## Quick start (one command, sets up a public link for relatives)
+## Quick start
 
-If you just want to get a room running and share it with family with the least
-effort, use the all-in-one script instead of the manual steps below. It installs
-dependencies, builds the app, starts the server, and opens a Cloudflare Tunnel —
-all in one go.
+### Option A: Desktop app (Windows, easiest)
+
+No terminal, no manual steps. From `/desktop`:
+
+```bash
+cd desktop
+npm install
+npm run dist      # builds an installer at desktop/dist/Watch Together Setup *.exe
+```
+
+Run the installer, open "Watch Together" from the Start Menu, click **Start Watch
+Party**. It shows a shareable link and QR code — send that to your relatives.
+Closing the window keeps the party running in the system tray; use the tray
+menu's **Quit** to fully stop it.
+
+(For development instead of building an installer: `npm start` in `/desktop` runs
+it directly via Electron.)
+
+### Option B: One-command script (macOS/Linux, or Windows without the desktop app)
+
+Installs dependencies, builds the app, starts the server, and opens a Cloudflare
+Tunnel — all in one go.
 
 - **macOS**: double-click `start.command` (or run `./start.sh` in Terminal)
 - **Linux**: run `./start.sh` in a terminal
@@ -35,9 +66,10 @@ prints a public `https://....trycloudflare.com` link — that's what you share
 with your relatives. Press Ctrl+C (or close the window on Windows) to stop
 everything when you're done.
 
-See [Sharing it with relatives over the internet](#sharing-it-with-relatives-over-the-internet-cloudflare-tunnel)
-below for details on what this is doing and its limitations (temporary link,
-your computer needs to stay on).
+Both options use the same underlying mechanism — see
+[Sharing it with relatives over the internet](#sharing-it-with-relatives-over-the-internet-cloudflare-tunnel)
+below for what that's doing and its limitations (temporary link, your computer
+needs to stay on).
 
 ## Running locally (manual / development)
 
@@ -50,7 +82,10 @@ npm run dev
 ```
 
 Runs on `http://localhost:4000` by default. Uploaded videos are stored in
-`server/uploads/` (not committed to git).
+`server/uploads/` (not committed to git). Transcoding incompatible videos
+requires `ffmpeg` and `ffprobe` on your `PATH` — if they're not found, the
+server just streams the original file as-is instead (see
+[Video codec compatibility](#video-codec-compatibility) below).
 
 ### 2. Start the client
 
@@ -76,7 +111,8 @@ Runs on `http://localhost:5173` by default.
 The server runs on your own machine (`localhost`), which relatives can't reach
 directly. [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
 exposes it with a public `https://` link, without needing a domain, a static IP,
-or opening ports on your router.
+or opening ports on your router. The desktop app and the one-command scripts both
+do this automatically; the steps below are for doing it manually.
 
 This runs on **your machine** (wherever you're running the server) — Cloudflare's
 CLI (`cloudflared`) needs to run alongside the app itself.
@@ -122,7 +158,27 @@ Cloudflared prints a public link like `https://random-two-words.trycloudflare.co
 - Your computer needs to stay on and connected for as long as anyone might want
   to watch (the server and the tunnel both run locally).
 - Good for a one-off watch party. If you want a permanent link that doesn't change,
-  that needs a Cloudflare account and a domain — ask if you want that set up instead.
+  that needs a Cloudflare account (free) and a one-time `cloudflared tunnel login`
+  — ask if you want that set up instead.
+
+## Video codec compatibility
+
+Browsers only play certain codecs natively (H.264 video + AAC/MP3 audio is safe
+everywhere). A video with anything else — common with `.mkv` files, HEVC, VP9/Opus,
+etc. — would otherwise just silently fail to play. To handle this, the server:
+
+1. Probes the uploaded file's actual codec with `ffprobe`.
+2. If it's already browser-compatible, streams it as-is (no change from before).
+3. Otherwise, transcodes it to HLS in the background with `ffmpeg`. Playback
+   becomes available as soon as the first segment is ready (typically seconds,
+   not the full transcode time), while the rest keeps converting. The client uses
+   `hls.js` for this in Chrome/Firefox (Safari plays HLS natively).
+
+This requires `ffmpeg`/`ffprobe` to be installed and on `PATH` on whichever
+machine is running the server. It is **not** currently bundled into the desktop
+app's installer (unlike `cloudflared.exe`, which is) — if it's missing, transcoding
+is skipped and the original file streams as-is (which may not play for everyone,
+depending on the codec).
 
 ## Notes & next steps
 
@@ -135,5 +191,12 @@ Cloudflared prints a public link like `https://random-two-words.trycloudflare.co
   family watch-party feel. If you want the host to be the only one in control,
   the socket handler in `server/index.js` (`playback-update`) is where to add
   that restriction.
+- The Quick Tunnel link is temporary and changes on every restart, and there's no
+  automatic recovery if the tunnel connection drops mid-party — both would be
+  solved by a named Cloudflare Tunnel (stable URL, free account required) plus
+  retry logic in `desktop/launcher.js`.
+- `ffmpeg`/`ffprobe` aren't bundled with the desktop app yet (see
+  [Video codec compatibility](#video-codec-compatibility)) — bundling them the
+  same way `cloudflared.exe` is would remove that manual dependency.
 - No voice chat yet — pair with a phone/video call for now if you want to talk
   while watching. WebRTC voice could be added later.
