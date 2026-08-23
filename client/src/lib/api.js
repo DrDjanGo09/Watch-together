@@ -79,3 +79,7 @@ export async function uploadVideo(roomId, file, hostToken, onProgress) {
 export function videoUrl(roomId) {
   return `${API_BASE}/api/rooms/${roomId}/video`;
 }
+
+export function hlsPlaylistUrl(roomId) {
+  return `${API_BASE}/api/rooms/${roomId}/hls/playlist.m3u8`;
+}

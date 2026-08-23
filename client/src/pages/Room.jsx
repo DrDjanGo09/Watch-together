@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useParams } from 'react-router-dom';
-import { getRoom, uploadVideo, verifyPin, videoUrl } from '../lib/api';
+import Hls from 'hls.js';
+import { getRoom, uploadVideo, verifyPin, videoUrl, hlsPlaylistUrl } from '../lib/api';
 import { getSocket } from '../lib/socket';
 
 const SYNC_DRIFT_TOLERANCE = 1.5; // seconds
@@ -25,10 +26,14 @@ export default function Room() {
   const [chatInput, setChatInput] = useState('');
   const [uploadProgress, setUploadProgress] = useState(null);
   const [hasVideo, setHasVideo] = useState(false);
+  const [playbackMode, setPlaybackMode] = useState('direct');
+  const [transcode, setTranscode] = useState(null);
   const [error, setError] = useState('');
   const [reactions, setReactions] = useState([]);
 
   const videoRef = useRef(null);
+  const hlsRef = useRef(null);
+  const [videoEl, setVideoEl] = useState(null);
   const socketRef = useRef(null);
   // Counts DOM events (play/pause/seeked) we're about to trigger ourselves by
   // applying a remote sync, so broadcastPlayback can tell them apart from a
@@ -46,6 +51,8 @@ export default function Room() {
         setRoomInfo(info);
         setNeedsPin(info.requiresPin);
         setHasVideo(info.hasVideo);
+        setPlaybackMode(info.playbackMode || 'direct');
+        setTranscode(info.transcode || null);
       })
       .catch((err) => setError(err.message));
   }, [roomId]);
@@ -85,12 +92,21 @@ export default function Room() {
           setJoined(true);
           setParticipants(res.participants || []);
           setHasVideo(res.hasVideo);
+          setPlaybackMode(res.playbackMode || 'direct');
+          setTranscode(res.transcode || null);
           applyRemoteSync(res.playback);
         });
       };
       const onDisconnect = () => setJoined(false);
       const onParticipants = (list) => setParticipants(list);
-      const onVideoReady = () => setHasVideo(true);
+      const onVideoReady = (info) => {
+        setHasVideo(true);
+        setPlaybackMode(info?.playbackMode || 'direct');
+        setTranscode(info?.transcode || null);
+      };
+      const onTranscodeProgress = (payload) => {
+        setTranscode((prev) => ({ ...prev, ...payload, status: payload.error ? 'error' : payload.done ? 'done' : 'transcoding' }));
+      };
       const onChatMessage = (msg) => setMessages((prev) => [...prev, msg]);
       const onPlaybackSync = (playback) => applyRemoteSync(playback);
       const onReaction = ({ emoji }) => {
@@ -112,6 +128,7 @@ export default function Room() {
       socket.on('disconnect', onDisconnect);
       socket.on('participants-update', onParticipants);
       socket.on('video-ready', onVideoReady);
+      socket.on('transcode-progress', onTranscodeProgress);
       socket.on('chat-message', onChatMessage);
       socket.on('playback-sync', onPlaybackSync);
       socket.on('reaction', onReaction);
@@ -123,6 +140,7 @@ export default function Room() {
         socket.off('disconnect', onDisconnect);
         socket.off('participants-update', onParticipants);
         socket.off('video-ready', onVideoReady);
+        socket.off('transcode-progress', onTranscodeProgress);
         socket.off('chat-message', onChatMessage);
         socket.off('reaction', onReaction);
         socket.off('playback-sync', onPlaybackSync);
@@ -144,6 +162,39 @@ export default function Room() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Attach hls.js when the video needed converting (its codec wasn't
+  // browser-playable). A direct-mode video just uses a plain <video src>,
+  // set in the JSX below, so this effect only has work to do in 'hls' mode.
+  //
+  // Depends on videoEl (state, set via a callback ref) rather than reading
+  // videoRef.current directly: hasVideo can flip true from the initial
+  // getRoom() fetch before the name-entry screen is dismissed, i.e. before
+  // the <video> tag is even rendered. Since none of [hasVideo, playbackMode,
+  // roomId] change again once the video tag actually mounts, an effect keyed
+  // on those alone would silently never re-run and never attach. videoEl
+  // changes exactly when the DOM node itself appears, so it doesn't miss that.
+  useEffect(() => {
+    if (!hasVideo || playbackMode !== 'hls') return;
+    const v = videoEl;
+    if (!v) return;
+    const src = hlsPlaylistUrl(roomId);
+
+    if (Hls.isSupported()) {
+      const hls = new Hls({ liveSyncDurationCount: 6 });
+      hlsRef.current = hls;
+      hls.loadSource(src);
+      hls.attachMedia(v);
+      return () => {
+        hls.destroy();
+        hlsRef.current = null;
+      };
+    }
+    // Safari plays HLS natively and doesn't need hls.js at all.
+    if (v.canPlayType('application/vnd.apple.mpegurl')) {
+      v.src = src;
+    }
+  }, [videoEl, hasVideo, playbackMode, roomId]);
 
   async function handlePinSubmit(e) {
     e.preventDefault();
@@ -183,8 +234,17 @@ export default function Room() {
     setUploadProgress(0);
     setError('');
     try {
-      await uploadVideo(roomId, file, hostToken, setUploadProgress);
-      setHasVideo(true);
+      const result = await uploadVideo(roomId, file, hostToken, setUploadProgress);
+      // Direct-mode videos are playable immediately; HLS-mode ones need the
+      // server to finish converting the first segment first — that arrives
+      // via the 'video-ready' socket event (broadcast to the host too), so
+      // hasVideo isn't set here for that case.
+      if (result.playbackMode === 'direct') {
+        setHasVideo(true);
+      } else {
+        setPlaybackMode('hls');
+        setTranscode({ status: 'transcoding', percent: 0 });
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -274,9 +334,12 @@ export default function Room() {
           {hasVideo ? (
             <div className="player-wrap">
               <video
-                ref={videoRef}
+                ref={(el) => {
+                  videoRef.current = el;
+                  setVideoEl(el);
+                }}
                 className="player"
-                src={videoUrl(roomId)}
+                src={playbackMode === 'direct' ? videoUrl(roomId) : undefined}
                 controls
                 onPlay={broadcastPlayback}
                 onPause={broadcastPlayback}
@@ -290,8 +353,18 @@ export default function Room() {
                 ))}
               </div>
             </div>
+          ) : transcode?.status === 'transcoding' ? (
+            <div className="video-placeholder">Processing video for playback… {transcode.percent || 0}%</div>
           ) : (
             <div className="video-placeholder">Waiting for the host to upload the video…</div>
+          )}
+
+          {hasVideo && playbackMode === 'hls' && transcode && transcode.status !== 'done' && (
+            <p className="transcode-note">
+              {transcode.status === 'error'
+                ? 'Background conversion hit an error — playback may stop partway through.'
+                : `Still converting the rest in the background (${transcode.percent || 0}%) — jumping far ahead may need to buffer.`}
+            </p>
           )}
 
           {hasVideo && (

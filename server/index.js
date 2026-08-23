@@ -6,6 +6,7 @@ const fs = require('fs');
 const multer = require('multer');
 const { nanoid } = require('nanoid');
 const { Server } = require('socket.io');
+const { probeCompatibility, startHlsTranscode, isValidSegmentName } = require('./transcode');
 
 const PORT = process.env.PORT || 4000;
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
@@ -20,17 +21,43 @@ const io = new Server(server, { cors: { origin: '*' } });
 
 // In-memory room store. Fine for personal/family use with a single server instance.
 // rooms: roomId -> { id, name, pin, hostToken, videoFile, videoOriginalName,
+//   playbackMode: 'direct' | 'hls', hlsDir, hlsProc, transcode: { status, percent },
 //   playback: { time, playing, updatedAt }, participants: Map(socketId -> name) }
 const rooms = new Map();
 
 function roomPublicInfo(room) {
+  // In HLS mode the uploaded file exists on disk well before it's actually
+  // playable — that needs at least one transcoded segment (status 'ready'
+  // or 'done'). Direct mode has no such gap: the file is playable the
+  // moment it exists.
+  const playable =
+    room.playbackMode === 'hls'
+      ? room.transcode?.status === 'ready' || room.transcode?.status === 'done'
+      : Boolean(room.videoFile);
+
   return {
     id: room.id,
     name: room.name,
     requiresPin: Boolean(room.pin),
-    hasVideo: Boolean(room.videoFile),
+    hasVideo: playable,
     videoOriginalName: room.videoOriginalName || null,
+    playbackMode: room.playbackMode || 'direct',
+    transcode: room.videoFile ? room.transcode : null,
   };
+}
+
+function cleanupVideoAssets(room) {
+  if (room.hlsProc) {
+    room.hlsProc.removeAllListeners('exit');
+    room.hlsProc.kill();
+    room.hlsProc = null;
+  }
+  if (room.videoFile) {
+    fs.unlink(path.join(UPLOAD_DIR, room.videoFile), () => {});
+  }
+  if (room.hlsDir) {
+    fs.rm(room.hlsDir, { recursive: true, force: true }, () => {});
+  }
 }
 
 // --- Room management ---
@@ -46,6 +73,10 @@ app.post('/api/rooms', (req, res) => {
     hostToken,
     videoFile: null,
     videoOriginalName: null,
+    playbackMode: 'direct',
+    hlsDir: null,
+    hlsProc: null,
+    transcode: null,
     playback: { time: 0, playing: false, updatedAt: Date.now() },
     participants: new Map(),
   };
@@ -124,7 +155,7 @@ app.post('/api/rooms/:roomId/upload/chunk', chunkUpload.single('chunk'), (req, r
   res.json({ ok: true });
 });
 
-app.post('/api/rooms/:roomId/upload/complete', (req, res) => {
+app.post('/api/rooms/:roomId/upload/complete', async (req, res) => {
   const room = rooms.get(req.params.roomId);
   if (!room) return res.status(404).json({ error: 'Room not found' });
   if (!requireHost(req, res, room)) return;
@@ -142,17 +173,54 @@ app.post('/api/rooms/:roomId/upload/complete', (req, res) => {
   const ext = path.extname(String(originalName || '')) || '.mp4';
   const finalFilename = `${room.id}-${nanoid(8)}${ext}`;
 
-  if (room.videoFile) {
-    fs.unlink(path.join(UPLOAD_DIR, room.videoFile), () => {});
-  }
+  cleanupVideoAssets(room);
 
   fs.renameSync(partPath, path.join(UPLOAD_DIR, finalFilename));
   room.videoFile = finalFilename;
   room.videoOriginalName = originalName || finalFilename;
   room.playback = { time: 0, playing: false, updatedAt: Date.now() };
 
-  io.to(room.id).emit('video-ready', { videoOriginalName: room.videoOriginalName });
-  res.json({ ok: true, videoOriginalName: room.videoOriginalName });
+  const finalPath = path.join(UPLOAD_DIR, finalFilename);
+  const { compatible, duration } = await probeCompatibility(finalPath);
+
+  if (compatible) {
+    room.playbackMode = 'direct';
+    room.transcode = null;
+    io.to(room.id).emit('video-ready', roomPublicInfo(room));
+  } else {
+    room.playbackMode = 'hls';
+    room.transcode = { status: 'transcoding', percent: 0 };
+    room.hlsDir = path.join(UPLOAD_DIR, `${finalFilename}-hls`);
+
+    room.hlsProc = startHlsTranscode(finalPath, room.hlsDir, {
+      duration,
+      onFirstSegment: () => {
+        // Only advance 'transcoding' -> 'ready'; never downgrade a status
+        // that already moved past it (e.g. 'done', if this fires late).
+        if (room.transcode?.status === 'transcoding') room.transcode.status = 'ready';
+        io.to(room.id).emit('video-ready', roomPublicInfo(room));
+      },
+      onProgress: (percent) => {
+        if (!room.transcode) return;
+        room.transcode.percent = percent;
+        io.to(room.id).emit('transcode-progress', { percent });
+      },
+      onDone: () => {
+        if (!room.transcode) return;
+        room.transcode.status = 'done';
+        room.transcode.percent = 100;
+        room.hlsProc = null;
+        io.to(room.id).emit('transcode-progress', { percent: 100, done: true });
+      },
+      onError: (err) => {
+        if (room.transcode) room.transcode.status = 'error';
+        room.hlsProc = null;
+        io.to(room.id).emit('transcode-progress', { error: err.message });
+      },
+    });
+  }
+
+  res.json({ ok: true, videoOriginalName: room.videoOriginalName, playbackMode: room.playbackMode });
 });
 
 // --- Video streaming with HTTP Range support ---
@@ -189,6 +257,31 @@ app.get('/api/rooms/:roomId/video', (req, res) => {
     'Content-Type': contentType,
   });
   fs.createReadStream(filePath, { start, end }).pipe(res);
+});
+
+// --- HLS streaming (used instead of the route above when the uploaded file's
+// codec isn't browser-playable and server/transcode.js is converting it) ---
+
+app.get('/api/rooms/:roomId/hls/playlist.m3u8', (req, res) => {
+  const room = rooms.get(req.params.roomId);
+  if (!room || !room.hlsDir) return res.status(404).end();
+  const playlistPath = path.join(room.hlsDir, 'playlist.m3u8');
+  if (!fs.existsSync(playlistPath)) return res.status(404).end();
+  // The playlist grows as more segments finish — never let a client (or a
+  // proxy) cache a stale copy that's missing the segments added since.
+  res.set('Cache-Control', 'no-store');
+  res.set('Content-Type', 'application/vnd.apple.mpegurl');
+  fs.createReadStream(playlistPath).pipe(res);
+});
+
+app.get('/api/rooms/:roomId/hls/:segment', (req, res) => {
+  const room = rooms.get(req.params.roomId);
+  if (!room || !room.hlsDir) return res.status(404).end();
+  if (!isValidSegmentName(req.params.segment)) return res.status(400).end();
+  const segmentPath = path.join(room.hlsDir, req.params.segment);
+  if (!fs.existsSync(segmentPath)) return res.status(404).end();
+  res.set('Content-Type', 'video/mp2t');
+  fs.createReadStream(segmentPath).pipe(res);
 });
 
 function guessContentType(filename) {
